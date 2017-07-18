@@ -54,6 +54,7 @@ class Module(object):
         self._buffers = OrderedDict()
         self._backward_hooks = OrderedDict()
         self._forward_hooks = OrderedDict()
+        self._forward_pre_hooks = OrderedDict()
         self._modules = OrderedDict()
         self.training = True
 
@@ -146,7 +147,7 @@ class Module(object):
         """
         return self._apply(lambda t: t.cuda(device_id))
 
-    def cpu(self, device_id=None):
+    def cpu(self):
         """Moves all model parameters and buffers to the CPU."""
         return self._apply(lambda t: t.cpu())
 
@@ -186,6 +187,22 @@ class Module(object):
         self._backward_hooks[handle.id] = hook
         return handle
 
+    def register_forward_pre_hook(self, hook):
+        """Registers a forward pre-hook on the module.
+
+        The hook will be called before :func:`forward` is invoked.
+        It should have the following signature::
+
+            hook(module, input) -> None
+
+        The hook should not modify the input.
+        This function returns a handle with a method ``handle.remove()``
+        that removes the hook from the module.
+        """
+        handle = hooks.RemovableHandle(self._forward_pre_hooks)
+        self._forward_pre_hooks[handle.id] = hook
+        return handle
+
     def register_forward_hook(self, hook):
         """Registers a forward hook on the module.
 
@@ -203,6 +220,8 @@ class Module(object):
         return handle
 
     def __call__(self, *input, **kwargs):
+        for hook in self._forward_pre_hooks.values():
+            hook(self, input)
         result = self.forward(*input, **kwargs)
         for hook in self._forward_hooks.values():
             hook_result = hook(self, input, result)
@@ -221,6 +240,11 @@ class Module(object):
                     functools.update_wrapper(wrapper, hook)
                     grad_fn.register_hook(wrapper)
         return result
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        if '_forward_pre_hooks' not in self.__dict__:
+            self._forward_pre_hooks = OrderedDict()
 
     def __getattr__(self, name):
         if '_parameters' in self.__dict__:
@@ -449,6 +473,8 @@ class Module(object):
             memo.add(self)
             yield prefix, self
             for name, module in self._modules.items():
+                if module is None:
+                    continue
                 submodule_prefix = prefix + ('.' if prefix else '') + name
                 for m in module.named_modules(memo, submodule_prefix):
                     yield m

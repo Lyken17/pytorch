@@ -30,7 +30,8 @@ class Dropout(Module):
         >>> input = autograd.Variable(torch.randn(20, 16))
         >>> output = m(input)
 
-    .. _Improving neural networks by preventing co-adaptation of feature detectors: https://arxiv.org/abs/1207.0580
+    .. _Improving neural networks by preventing co-adaptation of feature
+        detectors: https://arxiv.org/abs/1207.0580
     """
 
     def __init__(self, p=0.5, inplace=False):
@@ -69,7 +70,8 @@ class Dropout2d(Module):
 
     Args:
         p (float, optional): probability of an element to be zeroed.
-        inplace (bool, optional): If set to True, will do this operation in-place
+        inplace (bool, optional): If set to True, will do this operation
+            in-place
 
     Shape:
         - Input: :math:`(N, C, H, W)`
@@ -94,7 +96,7 @@ class Dropout2d(Module):
         self.inplace = inplace
 
     def forward(self, input):
-        return self._backend.Dropout2d(self.p, self.training, self.inplace)(input)
+        return self._backend.Dropout2d.apply(input, self.p, self.training, self.inplace)
 
     def __repr__(self):
         inplace_str = ', inplace' if self.inplace else ''
@@ -121,7 +123,8 @@ class Dropout3d(Module):
 
     Args:
         p (float, optional): probability of an element to be zeroed.
-        inplace (bool, optional): If set to True, will do this operation in-place
+        inplace (bool, optional): If set to True, will do this operation
+            in-place
 
     Shape:
         - Input: :math:`(N, C, D, H, W)`
@@ -146,7 +149,7 @@ class Dropout3d(Module):
         self.inplace = inplace
 
     def forward(self, input):
-        return self._backend.Dropout3d(self.p, self.training, self.inplace)(input)
+        return self._backend.Dropout3d.apply(input, self.p, self.training, self.inplace)
 
     def __repr__(self):
         inplace_str = ', inplace' if self.inplace else ''

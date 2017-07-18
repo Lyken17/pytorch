@@ -5,6 +5,7 @@ import math
 import torch
 import unittest
 import warnings
+import random
 from copy import deepcopy
 from collections import OrderedDict
 from itertools import product
@@ -15,7 +16,7 @@ from torch.autograd import gradcheck
 from torch.autograd.gradcheck import gradgradcheck
 from torch.autograd.function import once_differentiable
 
-from common import TestCase, run_tests, skipIfNoLapack
+from common import TestCase, run_tests, skipIfNoLapack, parse_set_seed_once
 from torch.autograd._functions import *
 from torch.autograd import Variable, Function
 
@@ -25,6 +26,8 @@ else:
     import pickle
 
 PRECISION = 1e-4
+
+parse_set_seed_once()
 
 
 @contextlib.contextmanager
@@ -917,8 +920,7 @@ class TestAutograd(TestCase):
         for i in range(10):
             Variable(torch.randn(10, 10), _grad_fn=CollectOnDelete())
 
-    @unittest.skipIf(not torch.cuda.is_available() or torch.cuda.device_count() < 2,
-                     "CUDA not available or <2 GPUs detected")
+    @unittest.skipIf(torch.cuda.device_count() < 2, "no multi-GPU")
     def test_unused_output_gpu(self):
         from torch.nn.parallel._functions import Broadcast
         x = Variable(torch.randn(5, 5).float().cuda(), requires_grad=True)
@@ -926,6 +928,25 @@ class TestAutograd(TestCase):
         y = outputs[-1] * 2
         y.sum().backward()
         self.assertEqual(x.grad.data, torch.ones(5, 5) * 2)
+
+    @unittest.skipIf(torch.cuda.device_count() < 2, "no multi-GPU")
+    def test_backward_device(self):
+        # check that current device matches the variable's device
+        device = [None]
+
+        class Identity(torch.autograd.Function):
+            @staticmethod
+            def forward(ctx, x):
+                return x.clone()
+
+            @staticmethod
+            def backward(ctx, grad_output):
+                device[0] = torch.cuda.current_device()
+                return grad_output.clone()
+
+        v = Variable(torch.randn(1).cuda(1), requires_grad=True)
+        Identity.apply(v).backward()
+        self.assertEqual(device[0], 1)
 
     def test_detach(self):
         x = Variable(torch.randn(10, 10), requires_grad=True)
@@ -1459,6 +1480,7 @@ function_tests = [
     (Asin, (), (torch.randn(S, S, S).clamp(-0.9, 0.9),)),
     (Acos, (), (torch.randn(S, S, S).clamp(-0.9, 0.9),)),
     (Atan, (), ((S, S, S),)),
+    (Atan2, (), ((S, S), (S, S))),
     (Reciprocal, (), (torch.rand(S, S, S) + 0.1,)),
     (Cmax, (), ((S, S, S), (S, S, S))),
     (Cmax, (), ((S, S, S), (S,)), 'broadcast_rhs'),
@@ -1475,20 +1497,20 @@ function_tests = [
     (Ceil, (), ((S, S, S),)),
     (Frac, (), ((S, S, S),)),
     (Fmod, (), ((S, S, S), 1.5)),
-    (Fmod, (), ((S, S, S), Variable(torch.rand(S, S, S) + 5e-2, requires_grad=False)), 'tensor'),
-    (Fmod, (), ((S, S, S), Variable(torch.rand(S) + 5e-2, requires_grad=False)), 'tensor_broadcast_rhs'),
-    (Fmod, (), ((S,), Variable(torch.rand(S, S, S) + 5e-2, requires_grad=False)), 'tensor_broadcast_lhs'),
-    (Fmod, (), ((S, 1, S), Variable(torch.rand(S, S) + 5e-2, requires_grad=False)), 'tensor_broadcast_all'),
+    (Fmod, (), ((S, S, S), Variable(torch.rand(S, S, S) + 1.5, requires_grad=False)), 'tensor'),
+    (Fmod, (), ((S, S, S), Variable(torch.rand(S) + 1.5, requires_grad=False)), 'tensor_broadcast_rhs'),
+    (Fmod, (), ((S,), Variable(torch.rand(S, S, S) + 1.5, requires_grad=False)), 'tensor_broadcast_lhs'),
+    (Fmod, (), ((S, 1, S), Variable(torch.rand(S, S) + 1.5, requires_grad=False)), 'tensor_broadcast_all'),
     (Lerp, (), ((S, S, S), (S, S, S), 0.2)),
     (Lerp, (), ((S, S, S), (S,), 0.2), 'broadcast_rhs'),
     (Lerp, (), ((S,), (S, S, S), 0.2), 'broadcast_lhs'),
     (Lerp, (), ((S, 1, S), (S, S), 0.2), 'broadcast_all'),
     (Rsqrt, (), (torch.rand(S, S, S) + 1e-2,)),
     (Remainder, (), ((S, S, S), 1.5)),
-    (Remainder, (), ((S, S, S), Variable(torch.rand(S, S, S) + 5e-2, requires_grad=False)), 'tensor'),
-    (Remainder, (), ((S, S, S), Variable(torch.rand(S) + 5e-2, requires_grad=False)), 'tensor_broadcast_rhs'),
-    (Remainder, (), ((S,), Variable(torch.rand(S, S, S) + 5e-2, requires_grad=False)), 'tensor_broadcast_lhs'),
-    (Remainder, (), ((S, 1, S), Variable(torch.rand(S, S) + 5e-2, requires_grad=False)), 'tensor_broadcast_all'),
+    (Remainder, (), ((S, S, S), Variable(torch.rand(S, S, S) + 1.5, requires_grad=False)), 'tensor'),
+    (Remainder, (), ((S, S, S), Variable(torch.rand(S) + 1.5, requires_grad=False)), 'tensor_broadcast_rhs'),
+    (Remainder, (), ((S,), Variable(torch.rand(S, S, S) + 1.5, requires_grad=False)), 'tensor_broadcast_lhs'),
+    (Remainder, (), ((S, 1, S), Variable(torch.rand(S, S) + 1.5, requires_grad=False)), 'tensor_broadcast_all'),
     (CmaxConstant, (), ((S, S, S), 0.5)),
     (CminConstant, (), ((S, S, S), 0.5)),
     (Mean, (), ((S, S, S),)),
@@ -1574,13 +1596,13 @@ function_tests = [
     (Median, (), ((S, S, S), 0, True), "keepdim"),
     (Median, (), ((S,), 0), 'dim0_1d'),
     (Median, (), ((S,), 0, True), "keepdim_1d"),
-    (Norm, (), (torch.rand(S, S, S), 1.5), '1_5'),
+    (Norm, (), (torch.rand(S, S, S) + 5e-2, 1.5), '1_5'),
     (Norm, (), ((S, S, S),), '2'),
     (Norm, (), ((S, S, S), 3), '3'),
-    (Norm, (), (torch.rand(S, S, S), 1.5, 1), '1_5_dim', [2]),
+    (Norm, (), (torch.rand(S, S, S) + 5e-2, 1.5, 1), '1_5_dim', [2]),
     (Norm, (), ((S, S, S), 2, 1), '2_dim', [2]),
     (Norm, (), ((S, S, S), 3, 1), '3_dim', [2]),
-    (Norm, (), (torch.rand(S, S, S), 1.5, 1, True), 'keepdim_1_5_dim', [2]),
+    (Norm, (), (torch.rand(S, S, S) + 5e-2, 1.5, 1, True), 'keepdim_1_5_dim', [2]),
     (Norm, (), ((S, S, S), 2, 1, True), 'keepdim_2_dim', [2]),
     (Norm, (), ((S, S, S), 3, 1, True), 'keepdim_3_dim', [2]),
     (Norm, (), ((S,), 2, 0), '2_dim_1d', [2]),
@@ -1706,6 +1728,7 @@ method_tests = [
     ('asin', (S, S, S), ()),
     ('acos', (S, S, S), ()),
     ('atan', (S, S, S), ()),
+    ('atan2', (S, S, S), ((S, S, S),)),
     ('reciprocal', (S, S, S), ()),
     ('round', (S, S, S), ()),
     ('sign', (S, S, S), ()),
@@ -1714,13 +1737,13 @@ method_tests = [
     ('ceil', (S, S, S), ()),
     ('rsqrt', (S, S, S), ()),
     ('fmod', (S, S, S), (1.5,)),
-    ('fmod', (S, S, S), (Variable(torch.rand(S, S, S) + 5e-2, requires_grad=False),), 'tensor'),
-    ('fmod', (S,), (Variable(torch.rand(S, S, S) + 5e-2, requires_grad=False),), 'tensor_broadcast_lhs'),
-    ('fmod', (S, 1, S), (Variable(torch.rand(S, S) + 5e-2, requires_grad=False),), 'tensor_broacast_all'),
+    ('fmod', (S, S, S), (Variable(torch.rand(S, S, S) + 1.5, requires_grad=False),), 'tensor'),
+    ('fmod', (S,), (Variable(torch.rand(S, S, S) + 1.5, requires_grad=False),), 'tensor_broadcast_lhs'),
+    ('fmod', (S, 1, S), (Variable(torch.rand(S, S) + 1.5, requires_grad=False),), 'tensor_broacast_all'),
     ('remainder', (S, S, S), (1.5,)),
-    ('remainder', (S, S, S), (Variable(torch.rand(S, S, S) + 5e-2, requires_grad=False),), 'tensor'),
-    ('remainder', (S,), (Variable(torch.rand(S, S, S) + 5e-2, requires_grad=False),), 'tensor_broadcast_lhs'),
-    ('remainder', (S, 1, S), (Variable(torch.rand(S, S) + 5e-2, requires_grad=False),), 'tensor_broacast_all'),
+    ('remainder', (S, S, S), (Variable(torch.rand(S, S, S) + 1.5, requires_grad=False),), 'tensor'),
+    ('remainder', (S,), (Variable(torch.rand(S, S, S) + 1.5, requires_grad=False),), 'tensor_broadcast_lhs'),
+    ('remainder', (S, 1, S), (Variable(torch.rand(S, S) + 1.5, requires_grad=False),), 'tensor_broacast_all'),
     ('lerp', (S, S, S), ((S, S, S), 0.4)),
     ('lerp', (S, S, S), ((S,), 0.4), 'broadcast_rhs'),
     ('lerp', (S,), ((S, S, S), 0.4), 'broadcast_lhs'),
@@ -1775,14 +1798,14 @@ method_tests = [
     ('prod', (S,), (0, True), 'keepdim_1d', [0]),
     ('var', (S, S, S), ()),
     ('var', (S, S, S), (1,), 'dim', [0]),
-    ('var', (S, S, S), (1, True), 'keepdim_dim', [0]),
+    ('var', (S, S, S), (1, True, True), 'keepdim_dim', [0]),
     ('var', (S,), (0,), 'dim_1d', [0]),
-    ('var', (S,), (0, True), 'keepdim_dim_1d', [0]),
+    ('var', (S,), (0, True, True), 'keepdim_dim_1d', [0]),
     ('std', (S, S, S), ()),
     ('std', (S, S, S), (1,), 'dim', [0]),
-    ('std', (S, S, S), (1, True), 'keepdim_dim', [0]),
+    ('std', (S, S, S), (1, True, True), 'keepdim_dim', [0]),
     ('std', (S,), (0,), 'dim_1d', [0]),
-    ('std', (S,), (0, True), 'keepdim_dim_1d', [0]),
+    ('std', (S,), (0, True, True), 'keepdim_dim_1d', [0]),
     ('renorm', (S, S, S), (2, 1, 0.5), 'dim', [1]),
     ('renorm', (S, S, S), (1, 2, 3), 'norm_1'),
     ('repeat', (S, S, S, S), (2, 3, 1, 4)),
@@ -1918,20 +1941,50 @@ method_tests = [
 # TODO: clamp with min/max
 
 
-def create_input(call_args, requires_grad=True):
+def make_non_contiguous(tensor):
+    osize = list(tensor.size())
+
+    # randomly inflate a few dimensions in osize
+    for _ in range(2):
+        dim = random.randint(0, len(osize) - 1)
+        add = random.randint(4, 15)
+        osize[dim] = osize[dim] + add
+
+    # narrow doesn't make a non-contiguous tensor if we only narrow the 0-th dimension,
+    # (which will always happen with a 1-dimensional tensor), so let's make a new
+    # right-most dimension and cut it off
+
+    input = tensor.new(torch.Size(osize + [random.randint(2, 3)]))
+    input = input.select(len(input.size()) - 1, random.randint(0, 1))
+    # now extract the input of correct size from 'input'
+    for i in range(len(osize)):
+        if input.size(i) != tensor.size(i):
+            bounds = random.randint(1, input.size(i) - tensor.size(i))
+            input = input.narrow(i, bounds, tensor.size(i))
+
+    input.copy_(tensor)
+    return input
+
+
+def create_input(call_args, requires_grad=True, non_contiguous=False):
     if not isinstance(call_args, tuple):
         call_args = (call_args,)
 
     def map_arg(arg):
+        def maybe_non_contig(tensor):
+            return tensor if not non_contiguous else make_non_contiguous(tensor)
+
         if isinstance(arg, torch.Size) or isinstance(arg, dont_convert):
             return arg
         elif isinstance(arg, tuple) and not isinstance(arg[0], Variable):
-            return Variable(torch.randn(*arg).double(), requires_grad=requires_grad)
+            return Variable(maybe_non_contig(torch.randn(*arg).double()), requires_grad=requires_grad)
         elif torch.is_tensor(arg):
             if isinstance(arg, torch.FloatTensor):
-                return Variable(arg.double(), requires_grad=requires_grad)
+                return Variable(maybe_non_contig(arg.double()), requires_grad=requires_grad)
             else:
-                return Variable(arg, requires_grad=requires_grad)
+                return Variable(maybe_non_contig(arg), requires_grad=requires_grad)
+        elif isinstance(arg, Variable) and non_contiguous:
+            return Variable(maybe_non_contig(arg.data), requires_grad=arg.requires_grad)
         else:
             return arg
     return tuple(map_arg(arg) for arg in call_args)
@@ -1946,6 +1999,18 @@ def unpack_variables(args):
         return args
 
 
+def generate_gradoutput(dummy_out, non_contiguous=False):
+    def maybe_non_contig(tensor):
+        return tensor if not non_contiguous else make_non_contiguous(tensor)
+
+    if isinstance(dummy_out, tuple):
+        grad_y = tuple(Variable(maybe_non_contig(torch.randn(x.size())), requires_grad=x.requires_grad)
+                       for x in dummy_out if isinstance(x, Variable))
+    else:
+        grad_y = (Variable(maybe_non_contig(torch.randn(dummy_out.size())), requires_grad=dummy_out.requires_grad),)
+
+    return grad_y
+
 ignore_inplace = set((
     'test_DivConstantFunction_by_tensor',
 
@@ -1953,8 +2018,8 @@ ignore_inplace = set((
 
 # these are just empirical observations, we should improve
 gradgradcheck_precision_override = {
-    'test_NormFunction_1_5': {'atol': 1e-2, 'rtol': 1e-2},
-    'test_NormFunction_2': {'atol': 1e-2, 'rtol': 1e-2},
+    'test_NormFunction_1_5': {'atol': 1.5e-2, 'rtol': 1e-2},
+    'test_NormFunction_2': {'atol': 2e-2, 'rtol': 1e-2},
     'test_NormFunction_3': {'atol': 5e-2, 'rtol': 1e-2},
 }
 
@@ -1986,7 +2051,7 @@ for test in function_tests:
 
         def do_test(self, cls=cls, constructor_args=new_constructor_args,
                     call_args=new_call_args, test_name=test_name):
-            input = create_input(call_args)
+            input = create_input(call_args, non_contiguous="View" not in cls.__name__)
             if cls._is_legacy:
                 def apply_fn(*input):
                     return cls(*constructor_args)(*input)
@@ -2012,11 +2077,7 @@ for test in function_tests:
                         self.assertTrue(inp.size() == inp.grad.size())
 
             dummy_out = apply_fn(*input)
-            if isinstance(dummy_out, tuple):
-                grad_y = tuple(Variable(torch.randn(x.size()), requires_grad=x.requires_grad)
-                               for x in dummy_out if isinstance(x, Variable))
-            else:
-                grad_y = (Variable(torch.randn(dummy_out.size()), requires_grad=dummy_out.requires_grad),)
+            grad_y = generate_gradoutput(dummy_out, non_contiguous=True)
 
             if test_name in gradgradcheck_precision_override:
                 atol = gradgradcheck_precision_override[test_name]['atol']
